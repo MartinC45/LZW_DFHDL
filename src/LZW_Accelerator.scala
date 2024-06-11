@@ -1,10 +1,5 @@
-// My Lempel Ziv Welch compression accelerator reimagined in DFHDL
-// more generic and thanks to DFiant HDL also both in VHDL and Verilog!
-
 import dfhdl.*
 import scala.math.*
-
-
 
 val clkCfg = ClkCfg(ClkCfg.Edge.Rising)
 val rstCfg = RstCfg(RstCfg.Mode.Sync, RstCfg.Active.Low)
@@ -30,7 +25,6 @@ case class LZWControlDebug (
 
 
 // Controller
-// Valid Ready design, ready is set when valid is 1
 class LZWControl(val debug : Boolean = true) extends RTDesign():
     import LZWCtrlState.*
     // Data In
@@ -263,15 +257,14 @@ class DictControl(
     
     
 // Control and Status Register
-// Might be worth reworking
 class LZWCSR() extends RTDesign:
     val data_in = Bits(32) <> IN // data written to the CSR
     val wr = Bit <> IN // write enable
     val rd = Bit <> IN // rd enable
-    val addr = Bits(1) <> IN // regs is number of 32 bit regs in CSR
+    val addr = Bits(1) <> IN 
     val data_out = Bits(32) <> OUT.REG
     
-    val status = Bits(32) <> IN // status can be more than 32 bits but is only read 32 bits at a time, use ctrl to select
+    val status = Bits(32) <> IN
     val control = Bits(32) <> OUT // Control info for the LZW
 
     val csr_r = Bits(32) <> VAR.REG

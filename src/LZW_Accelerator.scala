@@ -272,8 +272,7 @@ class LZWCSR() extends RTDesign:
     control := csr_r
     if (status(0))
         csr_r.din := (csr_r(31, 1), 0)
-    
-    if (wr)
+    else if (wr)
         if (addr.uint == 0)
             csr_r.din := data_in
     else if (rd)

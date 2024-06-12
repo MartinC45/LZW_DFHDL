@@ -6,7 +6,7 @@ val rstCfg = RstCfg(RstCfg.Mode.Sync, RstCfg.Active.Low)
 val RTcfg = RTDomainCfg(clkCfg, rstCfg)
 
 
-// Interfaces
+// "Interfaces" until interface feature is supported
 case class LZWControlDictIn (
     idx_from_dp : Bits[12] <> VAL,
     done : Bit <> VAL,
@@ -19,12 +19,13 @@ case class LZWControlDictOut (
     start : Bit <> VAL
 ) extends Struct
 
-case class LZWControlDebug (
-    a : Bit <> VAL
-) extends Struct
-
-
-// Controller
+/** LZW Controller
+  * responsible for managing interactions with input and output buffers through ready valid signals
+  * sends a symbol (8bit) and an index (12 bits) to the Dictionary Control together with a start signal
+  * receives done and found along with an index from Dictionary Control
+  * when found is true, the returned index is used together with a new symbol(data_in) for the next iteration, unless the returned index is FFF in which case it is sent to the output as no later index can be found
+  * when found is not true, the currently stored index (idx_r) is sent to the output, valid_out is enabled and the current symbol is used to start a new iteration and index is set to FFF
+  */
 class LZWControl(val debug : Boolean = true) extends RTDesign():
     import LZWCtrlState.*
     // Data In
@@ -52,8 +53,8 @@ class LZWControl(val debug : Boolean = true) extends RTDesign():
     // Registers
     val state = LZWCtrlState <> VAR.REG init Idle
     val continued = Bit <> VAR.REG init 0
-    val idx_r = Bits(12) <> VAR.REG init h"000"
-    val sym_r = Bits(8) <> VAR.REG init h"00"
+    val idx_r = Bits(12) <> VAR.REG init all(0)
+    val sym_r = Bits(8) <> VAR.REG init all(0)
     val locked = Bit <> VAR.REG init 0
     
 
@@ -63,7 +64,7 @@ class LZWControl(val debug : Boolean = true) extends RTDesign():
     ready_in := 0
     dict_out.start := 0
     valid_out := 0
-    data_out := h"000"
+    data_out := all(0)
     state match {
         case Idle => 
             if (valid_in && !locked)
@@ -72,7 +73,7 @@ class LZWControl(val debug : Boolean = true) extends RTDesign():
 
                 dict_out.start := 1                
                 if (!continued)
-                    dict_out.idx_to_dp := h"FFF"
+                    dict_out.idx_to_dp := all(1)
                     dict_out.symbol := data_in
                 else
                     dict_out.idx_to_dp := idx_r
@@ -92,10 +93,9 @@ class LZWControl(val debug : Boolean = true) extends RTDesign():
                         clear_finish := 1
                         locked.din := 0
 
-                
         case Receive => 
             if (dict_in.done)
-                if (!dict_in.found || (dict_in.found && dict_in.idx_from_dp == h"FFF"))
+                if (!dict_in.found || (dict_in.found && dict_in.idx_from_dp == all(1)))
                     continued.din := 0
                     valid_out := 1
                     
@@ -107,7 +107,7 @@ class LZWControl(val debug : Boolean = true) extends RTDesign():
                     if (ready_out)
                         if (!dict_in.found)
                             dict_out.start := 1
-                            dict_out.idx_to_dp := h"FFF"
+                            dict_out.idx_to_dp := all(1)
                             dict_out.symbol := sym_r
                             state.din := Receive
                         else
@@ -118,12 +118,12 @@ class LZWControl(val debug : Boolean = true) extends RTDesign():
                                 state.din := Receive
                                 
                                 dict_out.start := 1
-                                dict_out.idx_to_dp := h"FFF"
+                                dict_out.idx_to_dp := all(1)
                                 dict_out.symbol := data_in
-                    
+                     
                 else
                     if (!continued)
-                        idx_r.din := (b"0000", dict_in.idx_from_dp(7, 0))
+                        idx_r.din := (h"0", dict_in.idx_from_dp(7, 0))
                     else
                         idx_r.din := dict_in.idx_from_dp
                     continued.din := 1
@@ -137,7 +137,7 @@ class LZWControl(val debug : Boolean = true) extends RTDesign():
                         
                         dict_out.start := 1
                         if (!continued)
-                            dict_out.idx_to_dp := (b"0000", dict_in.idx_from_dp(7, 0))
+                            dict_out.idx_to_dp := (h"0", dict_in.idx_from_dp(7, 0))
                         else
                             dict_out.idx_to_dp := dict_in.idx_from_dp // use stored idx  
                         dict_out.symbol := data_in
@@ -168,38 +168,39 @@ class DictControl(
     
     // Vars
     val state = DictCtrlState <> VAR.REG init Idle
-    val matching = Bits(fetch_count) <> VAR
     val addr_r = Bits(12) <> VAR.REG init all(0)
     val idx_r = Bits(12) <> VAR.REG init all(0)
     val sym_r = Bits(8) <> VAR.REG init all(0)
     val entry_count = UInt(13) <> VAR.REG init 256
     val found = Bit <> VAR.REG init false
+    
+    val matching = Bits(fetch_count) <> VAR
     val matching_r = Bits(fetch_count) <> VAR.REG
-    val fc_int = UInt(12) <> VAR
     val idx_found = Bits(12) <> VAR
+    
+    val fc_int = UInt(12) <> VAR
     fc_int := fetch_count
     val fc_bits = ceil(log(fetch_count.toDouble)/log(2)).toInt
-    val addr_tmp = Bits(12) <> VAR
     
     matching := all(0)
     idx_found := all(0)
     en := 0
     rd := 0
-    lzw_out.done.din := 0
-    lzw_out.found.din := 0
+
     dict_out := all(0)
-    addr_tmp := all(0)
     state match
         case Idle => 
             if (lzw_in.start)
+                lzw_out.done.din := 0
+                lzw_out.found.din := 0
                 sym_r.din := lzw_in.symbol
                 idx_r.din := lzw_in.idx_to_dp
                 matching_r.din := all(0)
                 
                 // first symbol, simply return
-                if (lzw_in.idx_to_dp == h"FFF")
-                    lzw_out.done.din := 1
+                if (lzw_in.idx_to_dp == all(1))
                     lzw_out.idx_from_dp.din := (h"1", lzw_in.symbol)
+                    lzw_out.done.din := 1
                     lzw_out.found.din := 1
                 else
                     // first byte found before
@@ -208,14 +209,13 @@ class DictControl(
                         addr_r.din := h"100" + fc_int
                     else
                         addr := lzw_in.idx_to_dp
-                        addr_tmp := lzw_in.idx_to_dp >> fc_bits
+                        val addr_tmp = lzw_in.idx_to_dp >> fc_bits
                         addr_r.din := (addr_tmp << fc_bits) + fc_int
                     state.din := Search
                     rd := 1
                     
         case Search => 
-            // check if symbol and index match and if address is lower than number of entries
-            
+            // check if symbol and index match and if address is lower equal number of entries
             for (i <- 0 until fetch_count) 
                 if (dict_in(20 * (i+1) - 1, 20 * i) == (idx_r, sym_r) && addr_r.resize(13) + i - fetch_count < entry_count) // check address vs entry_count here)
                     matching(i) := true
@@ -226,37 +226,37 @@ class DictControl(
                 addr_r.din := addr_r.uint + fc_int
                 rd := 1
                 
-                if (matching != b"0".resize(fetch_count))    
+                if (matching != all(0))    
                     state.din := Idle
-                    lzw_out.done.din := 1
-                    lzw_out.found.din := true
                     lzw_out.idx_from_dp.din := idx_found
+                    lzw_out.done.din := 1
+                    lzw_out.found.din := 1
                     
-                else if ((matching == b"0".resize(fetch_count)) && 
-                    ((addr_r.resize(13) + fc_int > entry_count) || (addr_r.resize(13) + fc_int < 256)))
+                else if  ((addr_r.resize(13) + fc_int > entry_count) || (addr_r.resize(13) + fc_int < 256))
                     if (entry_count < 4096)
                         state.din := AddEntry
                     else
                         state.din := Idle
+                        lzw_out.idx_from_dp.din := all(0)
                         lzw_out.done.din := 1
                         lzw_out.found.din := 0
-                        lzw_out.idx_from_dp.din := all(0)
         
         case AddEntry =>
             entry_count.din := entry_count + 1
-            addr := (entry_count).bits(11, 0) // addr is simply the next
+            addr := entry_count.bits(11, 0) // addr is simply the next
             en := 1
             dict_out := (idx_r, sym_r)
             
             if (dict_in_valid) // continue to response once write is confirmed
                 state.din := Idle
+                lzw_out.idx_from_dp.din := all(0)
                 lzw_out.done.din := 1
                 lzw_out.found.din := 0
-                lzw_out.idx_from_dp.din := all(0)
                 
     
     
 // Control and Status Register
+// ought to be reworked
 class LZWCSR() extends RTDesign:
     val data_in = Bits(32) <> IN // data written to the CSR
     val wr = Bit <> IN // write enable
@@ -280,8 +280,9 @@ class LZWCSR() extends RTDesign:
             data_out.din := csr_r
         if (addr.uint == 1)
             data_out.din := status
+            
         
-class LZWnDict(val fetch_count : Int = 1) extends RTDesign():
+class LZWnDict(val fetch_count : Int = 1) extends RTDesign(RTcfg):
     val valid_in = Bit <> IN
     val data_in = Bits(8) <> IN
     val lzw_ready = Bit <> OUT
@@ -304,8 +305,6 @@ class LZWnDict(val fetch_count : Int = 1) extends RTDesign():
     
     val LZWctrl = new LZWControl
     val DICTctrl = new DictControl(fetch_count = fetch_count)
-    
-    val reg_to_get_clk_and_rst = Bit <> VAR.REG
     
     // LZW to Dict
     LZWctrl.dict_in <> DICTctrl.lzw_out
@@ -332,6 +331,7 @@ class LZWnDict(val fetch_count : Int = 1) extends RTDesign():
     DICTctrl.rd <> dict_ctrl_rd
     
 
+// Simple top level module to combine LZW, Memory, Memory IF and CSR
 class LZWtle() extends RTDesign(RTcfg):
     val valid_in = Bit <> IN
     val data_in = Bits(8) <> IN
@@ -345,7 +345,7 @@ class LZWtle() extends RTDesign(RTcfg):
     val CSR_dout = Bits(32) <> OUT
     val CSR_read = Bit <> IN
     val CSR_write = Bit <> IN
-    val CSR_address = Bits(ceil(log(1+1)/log(2)).toInt) <> IN
+    val CSR_address = Bits(ceil(log(1+1)/log(2)).toInt) <> IN // TBD larger CSR
     
     val LZW = new LZWnDict(fetch_count = 1) 
     val CSR = new LZWCSR()

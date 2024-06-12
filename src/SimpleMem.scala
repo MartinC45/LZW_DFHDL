@@ -2,8 +2,8 @@ import dfhdl._
 import scala.math._
 
 //* Simple Parametrizable Memory */
-class SimpleMem(val width : Int = 32, val depth : Int = 32) extends RTDesign:
-    val addr = Bits(ceil(log(depth)/log(2)).toInt) <> IN
+class SimpleMem(val width : Int = 32, val depth : Int = 4096) extends RTDesign:
+    val addr = Bits.until(depth) <> IN
     val en = Bit <> IN
     val data_in = Bits(width) <> IN
     val data_out = Bits(width) <> OUT.REG
